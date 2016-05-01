@@ -345,6 +345,7 @@ inline void SoftmaxGrad(Tensor<gpu, 2, DType> &dst,
   
   cudaMemcpy(&valid_count, valid_count_gpu, sizeof(index_t),
                            cudaMemcpyDeviceToHost);
+  cudaFree(valid_count_gpu);
 }
 
 template<int n_bits, typename DType>
@@ -373,12 +374,17 @@ template<int n_bits, typename DType>
 __global__ void Softmax3DGradKernel(Tensor<gpu, 3, DType> dst,
                                     const Tensor<gpu, 3, DType> src,
                                     const Tensor<gpu, 2, DType> label,
-                                    DType ignore_label) {
+                                    DType ignore_label,
+                                    index_t *valid_count) {
   const index_t xmax = dst.size(1);
   const index_t nmax = dst.size(2);
   const unsigned n_size = 1 << n_bits;
   const int y = blockIdx.x;
   const int n = threadIdx.x;
+  if (y == 0 && n == 0) {
+    *valid_count = 0;
+  }
+  __syncthreads();
   for (index_t n_index = n; n_index < nmax; n_index += n_size) {
     int k = static_cast<int>(label[y][n_index]);
     if (k == static_cast<int>(ignore_label)) {
@@ -386,6 +392,7 @@ __global__ void Softmax3DGradKernel(Tensor<gpu, 3, DType> dst,
         dst[y][i][n_index] = 0.0f;
       }
     } else {
+      atomicAdd(valid_count, 1);
       for (index_t i = 0; i < xmax; ++i) {
         if (i == k) {
           dst[y][i][n_index] = src[y][i][n_index] - 1.0f;
@@ -452,7 +459,8 @@ template<typename DType>
 inline void SoftmaxGrad(Tensor<gpu, 3, DType> &dst,
                         const Tensor<gpu, 3, DType> &src,
                         const Tensor<gpu, 2, DType> &label,
-                        const DType &ignore_label) {
+                        const DType &ignore_label,
+                        index_t *valid_count) {
   dim3 dimBlock(kBaseThreadNum);
   dim3 dimGrid(dst.size(0));
   CHECK_EQ(dst.shape_, src.shape_) << "SoftmaxGrad: shape mismatch";
@@ -460,7 +468,17 @@ inline void SoftmaxGrad(Tensor<gpu, 3, DType> &dst,
   CHECK_EQ(dst.size(2), label.size(1)) << "SoftmaxGrad: label shape mismatch";
   CheckLaunchParam(dimGrid, dimBlock, "SoftmaxGrad");
   cudaStream_t stream = Stream<gpu>::GetStream(dst.stream_);
-  Softmax3DGradKernel<kBaseThreadBits, DType><<<dimGrid, dimBlock, 0, stream>>>(dst, src, label, ignore_label);
+  index_t *valid_count_gpu;
+  cudaMalloc(&valid_count_gpu, sizeof(index_t));
+  Softmax3DGradKernel<kBaseThreadBits, DType><<<dimGrid, dimBlock, 0, stream>>>(
+    dst,
+    src,
+    label,
+    ignore_label,
+    valid_count_gpu);
+  cudaMemcpy(&valid_count, valid_count_gpu, sizeof(index_t),
+                           cudaMemcpyDeviceToHost);
+  cudaFree(valid_count_gpu);
 }
 
 

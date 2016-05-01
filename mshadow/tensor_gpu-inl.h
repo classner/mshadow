@@ -176,8 +176,9 @@ template<typename DType>
 inline void SoftmaxGrad(Tensor<gpu, 2, DType> dst,
                         const Tensor<gpu, 2, DType> &src,
                         const Tensor<gpu, 1, DType> &label,
-                        const DType &ignore_label) {
-  cuda::SoftmaxGrad(dst, src, label, ignore_label);
+                        const DType &ignore_label,
+                        index_t *valid_count) {
+  cuda::SoftmaxGrad(dst, src, label, ignore_label, valid_count);
 }
 
 template<typename DType>
@@ -191,8 +192,9 @@ template<typename DType>
 inline void SoftmaxGrad(Tensor<gpu, 3, DType> dst,
                         const Tensor<gpu, 3, DType> &src,
                         const Tensor<gpu, 2, DType> &label,
-                        const DType &ignore_label) {
-  cuda::SoftmaxGrad(dst, src, label, ignore_label);
+                        const DType &ignore_label,
+                        index_t *valid_count) {
+  cuda::SoftmaxGrad(dst, src, label, ignore_label, valid_count);
 }
 
 template<typename IndexType, typename DType>
