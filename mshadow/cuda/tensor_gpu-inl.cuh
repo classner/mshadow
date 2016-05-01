@@ -210,11 +210,15 @@ __global__ void SoftmaxGradKernel(DstPlan dst, SrcPlan1 src, SrcPlan2 label, ind
 
 template<int x_bits, typename DType, typename DstPlan, typename SrcPlan1, typename SrcPlan2>
 __global__ void SoftmaxGradKernel(DstPlan dst, SrcPlan1 src, SrcPlan2 label, index_t xmax,
-                                  DType ignore_label) {
+                                  DType ignore_label, index_t *valid_count) {
   const unsigned x_size = 1 << x_bits;
   const int y = blockIdx.x;
   const int k = static_cast<int>(label.Eval(0, y));
-
+  if (y == 0) {
+     // Initialize.
+     *valid_count = 0;     
+  }
+  __syncthreads();  
   // calculate normalizer, with writeback
   for (unsigned x = 0; x < xmax; x += x_size) {
     const unsigned xindex = x + threadIdx.x;
@@ -222,11 +226,12 @@ __global__ void SoftmaxGradKernel(DstPlan dst, SrcPlan1 src, SrcPlan2 label, ind
       if (static_cast<int>(ignore_label) == k) {
         dst.REval(y, xindex) = 0.0f;
       } else {
+        atomicAdd(valid_count, 1);
         if (xindex == k) {
           dst.REval(y, xindex) = src.Eval(y, xindex) - 1.0f;
         } else {
           dst.REval(y, xindex) = src.Eval(y, xindex);
-        }
+        }    
       }
     }
   }
@@ -318,20 +323,28 @@ template<typename DType>
 inline void SoftmaxGrad(Tensor<gpu, 2, DType> &dst,
                         const Tensor<gpu, 2, DType> &src,
                         const Tensor<gpu, 1, DType> &label,
-                        const DType &ignore_label) {
+                        const DType &ignore_label,
+                        index_t *valid_count) {
   dim3 dimBlock(kBaseThreadNum);
   dim3 dimGrid(dst.size(0));
   CHECK_EQ(dst.shape_, src.shape_) << "SoftmaxGrad: shape mismatch";
   CHECK_EQ(dst.size(0), label.size(0)) << "SoftmaxGrad: label shape mismatch";
   CheckLaunchParam(dimGrid, dimBlock, "SoftmaxGrad");
+ 
   cudaStream_t stream = Stream<gpu>::GetStream(dst.stream_);
+  index_t *valid_count_gpu;
+  cudaMalloc(&valid_count_gpu, sizeof(index_t));
   SoftmaxGradKernel<kBaseThreadBits, DType>
       <<<dimGrid, dimBlock, 0, stream>>>
       (expr::MakePlan(dst),
        expr::MakePlan(src),
        expr::MakePlan(label),
        dst.size(1),
-       ignore_label);
+       ignore_label,
+       valid_count_gpu);
+  
+  cudaMemcpy(&valid_count, valid_count_gpu, sizeof(index_t),
+                           cudaMemcpyDeviceToHost);
 }
 
 template<int n_bits, typename DType>
